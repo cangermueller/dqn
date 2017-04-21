@@ -1,29 +1,28 @@
 import tensorflow as tf
 from tensorflow.contrib import slim
-import gym
 
 
 class Network(object):
 
-    def __init__(self, env, dual=False):
-        self.env = env
-        self.nb_action = self.env.action_space.n
+    def __init__(self, state, nb_action, prepro_state=None, dual=False):
+        self.state = state
+        if prepro_state is None:
+            self.prepro_state = self.state
+        else:
+            self.prepro_state = prepro_state
+        self.nb_action = nb_action
         self.dual = dual
+        self._build()
 
     def _build_stem(self):
         pass
 
     def _build(self):
-        if isinstance(self.env.observation_space, gym.spaces.Discrete):
-            self.state = tf.placeholder(tf.float32, [None], name='state')
-            self._state = tf.one_hot(self.state, self.env.observation_space.n)
-        else:
-            self.state = tf.placeholder(
-                tf.float32, [None] + list(self.env.observation_space.shape),
-                name='state')
-            self._state = self.state
-        self._build()
+        self._build_stem()
         self._add_output_layers()
+        self.trainable_vars = tf.get_collection(
+            tf.GraphKeys.TRAINABLE_VARIABLES,
+            tf.get_variable_scope().name)
 
     def _add_output_layers(self):
         if self.dual:
@@ -44,8 +43,24 @@ class Mlp(Network):
         super(Mlp, self).__init__(*args, **kwargs)
 
     def _build_stem(self):
-        layer = self._state
-        for idx, nb_hidden in range(len(self.nb_hidden)):
-            layer = slim.fully_connected(layer, nb_hidden,
-                                         name='fc%d' % (nb_hidden + 1))
+        layer = self.prepro_state
+        for nb_hidden in self.nb_hidden:
+            layer = slim.fully_connected(layer, nb_hidden)
         self.stem = layer
+        return self.stem
+
+
+class Cnn(Network):
+
+    def __init__(self, nb_kernels=[64, 128], kernel_sizes=[3, 3]):
+        self.nb_kernels = nb_kernels
+        self.kernel_sizes = kernel_sizes
+
+    def _build_stem(self):
+        layer = self.prepro_state
+        for idx in range(len(self.nb_kernels)):
+            layer = slim.conv2d(layer, self.nb_kernels[idx],
+                                self.kernel_sizes[idx])
+            layer = slim.max_pool2d(layer, 2)
+        self.stem = slim.flatten(layer)
+        return self.stem

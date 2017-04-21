@@ -6,7 +6,7 @@
 *.log
 *.pot
 __pycache__/*
-.cache/*
+.cache/
 .ipynb_checkpoints
 
 # Project files
