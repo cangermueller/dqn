@@ -33,14 +33,14 @@ class App(object):
             help='Environment',
             default='FrozenLake-v0')
         p.add_argument(
-            '-i', '--in_model',
-            help='Input model checkpoint path')
+            '-i', '--in_checkpoint',
+            help='Input checkpoint path')
         p.add_argument(
-            '-o', '--out_model',
-            help='Output model checkpoint path')
+            '-o', '--out_checkpoint',
+            help='Output checkpoint path')
         p.add_argument(
             '--save_freq',
-            help='Frequency in epochs to save models',
+            help='Frequency in epochs to create checkpoint',
             type=int,
             default=1000)
 
@@ -94,7 +94,7 @@ class App(object):
             '--update_freq_target',
             help='Update frequency in steps of target network',
             type=int,
-            default=1)
+            default=4)
         p.add_argument(
             '--eps',
             help='Start value of eps parameter',
@@ -112,6 +112,10 @@ class App(object):
             default=1000)
 
         # Network architecture
+        p.add_argument(
+            '--no_dual',
+            help='No dual architecture',
+            action='store_true')
         p.add_argument(
             '--nb_hidden',
             help='Number of hidden units in MLP',
@@ -137,27 +141,43 @@ class App(object):
         opts = self.opts
         return networks.Mlp(nb_hidden=opts.nb_hidden, *args, **kwargs)
 
-    def log_explore(self, episode, nb_step_tot, reward_episode, reward_avg,
-                    loss_avg):
+    def callback(self, episode, nb_step_tot,
+                 nb_update, nb_update_target,
+                 reward_episode, reward_avg, loss_avg,
+                 eps, *args, **kwargs):
 
-        def format_na_float(x):
+        if episode % self.opts.save_freq == 0:
+            self.save_graph()
+
+        def format_na(x, spec):
             if x is None:
                 return 'NA'
             else:
-                return '%.2f' % x
+                return '{:{spec}}'.format(x, spec=spec)
 
         tmp = ['episode={episode:d}',
                'steps={steps:d}',
+               'updates={updates:d}',
+               'updates_t={updates_t:d}',
                'r_epi={r_epi:.2f}',
                'r_avg={r_avg:s}',
-               'loss={loss:s}']
+               'loss={loss:s}',
+               'eps={eps:.4f}']
         tmp = '  '.join(tmp)
         tmp = tmp.format(episode=episode,
                          steps=nb_step_tot,
+                         updates=nb_update,
+                         updates_t=nb_update_target,
                          r_epi=reward_episode,
-                         r_avg=format_na_float(reward_avg),
-                         loss=format_na_float(loss_avg))
+                         r_avg=format_na(reward_avg, '.2f'),
+                         loss=format_na(loss_avg, '5g'),
+                         eps=eps)
         print(tmp)
+
+    def save_graph(self):
+        if self.opts.out_checkpoint:
+            self.log.info('Saving graph to %s ...' % self.opts.out_checkpoint)
+            self.saver.save(self.sess, self.opts.out_checkpoint)
 
     def main(self, name, opts):
         logging.basicConfig(filename=opts.log_file,
@@ -190,15 +210,19 @@ class App(object):
                                    name='state')
             prepro_state = state
 
-        pred_net = network_fun(state=state, nb_action=env.action_space.n,
-                               prepro_state=prepro_state)
-        target_net = network_fun(state=state, nb_action=env.action_space.n,
-                                 prepro_state=prepro_state)
+        nets = []
+        for name in ['pred_net', 'target_net']:
+            with tf.variable_scope(name):
+                nets.append(network_fun(state=state,
+                                        nb_action=env.action_space.n,
+                                        prepro_state=prepro_state,
+                                        dual=not opts.no_dual))
+        pred_net, target_net = nets
 
         # Setup agent
         experience = Experience(opts.experience_size, state_shape=state_shape)
-        sess = tf.Session()
-        agent = agents.Agent(sess, pred_net, target_net, experience,
+        self.sess = tf.Session()
+        agent = agents.Agent(self.sess, pred_net, target_net, experience,
                              eps=opts.eps,
                              eps_min=opts.eps_min,
                              eps_steps=opts.eps_steps,
@@ -211,9 +235,15 @@ class App(object):
                              update_freq_target=opts.update_freq_target,
                              nb_pretrain_step=opts.nb_pretrain_step)
 
-        sess.run(tf.global_variables_initializer())
-        agent.explore(env, opts.nb_episode, callback=self.log_explore)
+        self.saver = tf.train.Saver()
+        if opts.in_checkpoint:
+            log.info('Restoring graph from %s ...' % opts.in_checkpoint)
+            self.saver.restore(self.sess, opts.in_checkpoint)
+        else:
+            self.sess.run(tf.global_variables_initializer())
+        agent.explore(env, opts.nb_episode, callback=self.callback)
 
+        self.save_graph()
         return 0
 
 

@@ -35,3 +35,5 @@ sdist/*
 docs/build/*
 /venv*/
 MANIFEST
+
+/dev/

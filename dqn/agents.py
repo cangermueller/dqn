@@ -60,9 +60,11 @@ class Agent(object):
         self.target_update = []
         for target_var, pred_var in zip(self.target_net.trainable_vars,
                                         self.pred_net.trainable_vars):
-            assert target_var.name == pred_var.name
+            assert target_var.name.split('/')[1:] == \
+                pred_var.name.split('/')[1:]
             update = (1 - self.target_rate) * target_var.value() + \
                 self.target_rate * pred_var.value()
+            update = target_var.assign(update)
             self.target_update.append(update)
 
     def update(self):
@@ -91,6 +93,8 @@ class Agent(object):
 
     def explore(self, env, nb_episode, max_steps=10000, callback=None):
         nb_step_tot = 0
+        nb_update = 0
+        nb_update_target = 0
         reward_avg = None
         loss_avg = None
 
@@ -121,17 +125,24 @@ class Agent(object):
                 # Update network
                 if nb_step_tot > self.nb_pretrain_step:
                     if nb_step_tot % self.update_freq == 0:
+                        nb_update += 1
                         loss = self.update()
                         loss_avg = running_avg(loss_avg, loss)
                     if nb_step_tot % self.update_freq_target == 0:
+                        nb_update_target += 1
                         self.sess.run(self.target_update)
 
                 if terminal:
                     reward_avg = running_avg(reward_avg, reward_episode)
                     if callback:
-                        callback(episode, nb_step_tot,
-                                 reward_episode, reward_avg,
-                                 loss_avg)
+                        callback(episode=episode,
+                                 nb_step_tot=nb_step_tot,
+                                 nb_update=nb_update,
+                                 nb_update_target=nb_update_target,
+                                 reward_episode=reward_episode,
+                                 reward_avg=reward_avg,
+                                 loss_avg=loss_avg,
+                                 eps=self.eps)
 
                 state = poststate
 
