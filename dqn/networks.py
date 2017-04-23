@@ -4,7 +4,8 @@ from tensorflow.contrib import slim
 
 class Network(object):
 
-    def __init__(self, state, nb_action, prepro_state=None, dual=False):
+    def __init__(self, state, nb_action, prepro_state=None, dual=False,
+                 *args, **kwargs):
         self.state = state
         if prepro_state is None:
             self.prepro_state = self.state
@@ -26,13 +27,16 @@ class Network(object):
 
     def _add_output_layers(self):
         if self.dual:
-            self.value = slim.fully_connected(self.stem, 1)
-            self.advantage = slim.fully_connected(self.stem, self.nb_action)
+            self.value = slim.fully_connected(self.stem, 1,
+                                              activation_fn=None)
+            self.advantage = slim.fully_connected(self.stem, self.nb_action,
+                                                  activation_fn=None)
             self.advantage -= tf.reduce_mean(self.advantage, axis=1,
                                              keep_dims=True)
             self.q_value = self.advantage + self.value
         else:
-            self.q_value = slim.fully_connected(self.stem, self.nb_action)
+            self.q_value = slim.fully_connected(self.stem, self.nb_action,
+                                                activation_fn=None)
         self.action = tf.argmax(self.q_value, axis=1)
 
 
@@ -45,7 +49,8 @@ class Mlp(Network):
     def _build_stem(self):
         layer = self.prepro_state
         for nb_hidden in self.nb_hidden:
-            layer = slim.fully_connected(layer, nb_hidden)
+            layer = slim.fully_connected(layer, nb_hidden,
+                                         activation_fn=tf.nn.relu)
         self.stem = layer
         return self.stem
 

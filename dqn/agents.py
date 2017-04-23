@@ -21,10 +21,11 @@ class Agent(object):
                  batch_size=32,
                  update_freq=4,
                  update_freq_target=1,
-                 double_dqn=False,
                  discount=0.99,
-                 nb_pretrain_step=None):
-
+                 nb_pretrain_step=None,
+                 huber_loss=False,
+                 max_grad_norm=None,
+                 *args, **kwargs):
         self.sess = sess
         self.pred_net = pred_net
         self.target_net = target_net
@@ -35,13 +36,14 @@ class Agent(object):
         self.learning_rate = learning_rate
         self.target_rate = target_rate
         self.batch_size = batch_size
-        self.double_dqn = double_dqn
         self.discount = discount
         self.update_freq = update_freq
         self.update_freq_target = update_freq_target
         if nb_pretrain_step is None:
             nb_pretrain_step = 0
         self.nb_pretrain_step = max(nb_pretrain_step, self.experience.size)
+        self.huber_loss = huber_loss
+        self.max_grad_norm = max_grad_norm
         self.define_loss_and_update()
 
     def define_loss_and_update(self):
@@ -51,8 +53,18 @@ class Agent(object):
             self.pred_net.q_value * tf.one_hot(self.action,
                                                self.pred_net.nb_action),
             axis=1)
-        self.loss = tf.reduce_mean(tf.squared_difference(pred, self.target))
+        delta = tf.abs(pred - self.target)
+        if self.huber_loss:
+            self.loss = tf.where(delta < 1.0,
+                                 0.5 * tf.square(delta),
+                                 delta - 0.5)
+        else:
+            self.loss = tf.square(delta)
+        self.loss = tf.reduce_mean(self.loss)
         self.grads = tf.gradients(self.loss, self.pred_net.trainable_vars)
+        if self.max_grad_norm is not None:
+            for idx, grad in enumerate(self.grads):
+                self.grads[idx] = tf.clip_by_norm(grad, self.max_grad_norm)
         self.optimizer = tf.train.AdamOptimizer(self.learning_rate)
         self.update_op = self.optimizer.apply_gradients(
             zip(self.grads, self.pred_net.trainable_vars))
@@ -68,28 +80,7 @@ class Agent(object):
             self.target_update.append(update)
 
     def update(self):
-        prestate, action, reward, poststate, terminal = \
-            self.experience.sample(self.batch_size)
-
-        target = self.sess.run(self.target_net.q_value,
-                               feed_dict={self.target_net.state: poststate})
-        if self.double_dqn:
-            post_action = self.sess.run(
-                self.pred_net.action,
-                feed_dict={self.pred_net.state: poststate})
-        else:
-            post_action = np.argmax(target, axis=1)
-        target = target[range(len(target)), post_action]
-        target = reward + self.discount * target * (1 - terminal)
-
-        loss, *_ = self.sess.run([self.loss, self.update_op],
-                                 feed_dict={self.pred_net.state: prestate,
-                                            self.action: action,
-                                            self.target: target})
-
-        self.eps = max(self.eps_min, self.eps - self.eps_decay)
-
-        return loss
+        pass
 
     def explore(self, env, nb_episode, max_steps=10000, callback=None):
         nb_step_tot = 0
@@ -148,3 +139,60 @@ class Agent(object):
 
     def play(self, env):
         pass
+
+
+class Dqn(Agent):
+
+    def __init__(self, double_dqn=False, *args, **kwargs):
+        self.double_dqn = double_dqn
+        super(Dqn, self).__init__(*args, **kwargs)
+
+    def update(self):
+        prestate, action, reward, poststate, terminal = \
+            self.experience.sample(self.batch_size)
+        target = self.sess.run(self.target_net.q_value,
+                               feed_dict={self.target_net.state: poststate})
+        if self.double_dqn:
+            postaction = self.sess.run(
+                self.pred_net.action,
+                feed_dict={self.pred_net.state: poststate})
+        else:
+            postaction = np.argmax(target, axis=1)
+        target = target[range(len(target)), postaction]
+        target = reward + self.discount * target * (1 - terminal)
+
+        loss, *_ = self.sess.run([self.loss, self.update_op],
+                                 feed_dict={self.pred_net.state: prestate,
+                                            self.action: action,
+                                            self.target: target})
+
+        self.eps = max(self.eps_min, self.eps - self.eps_decay)
+
+        return loss
+
+    def play(self, env):
+        pass
+
+
+class Sarsa(Agent):
+
+    def __init__(self, *args, **kwargs):
+        super(Sarsa, self).__init__(*args, **kwargs)
+
+    def update(self):
+        prestate, action, reward, poststate, terminal = \
+            self.experience.sample(self.batch_size)
+        target = self.sess.run(self.target_net.q_value,
+                               feed_dict={self.target_net.state: poststate})
+        postaction = np.argmax(target, axis=1)
+        target = target[range(len(target)), postaction]
+        target = reward + self.discount * target * (1 - terminal)
+
+        loss, *_ = self.sess.run([self.loss, self.update_op],
+                                 feed_dict={self.pred_net.state: prestate,
+                                            self.action: action,
+                                            self.target: target})
+
+        self.eps = max(self.eps_min, self.eps - self.eps_decay)
+
+        return loss
