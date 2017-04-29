@@ -25,6 +25,7 @@ class Agent(object):
                  nb_pretrain_step=None,
                  huber_loss=False,
                  max_grad_norm=None,
+                 max_steps=1000,
                  *args, **kwargs):
         self.sess = sess
         self.pred_net = pred_net
@@ -44,6 +45,7 @@ class Agent(object):
         self.nb_pretrain_step = max(nb_pretrain_step, self.experience.size)
         self.huber_loss = huber_loss
         self.max_grad_norm = max_grad_norm
+        self.max_steps = max_steps
         self.define_loss_and_update()
 
     def define_loss_and_update(self):
@@ -82,7 +84,14 @@ class Agent(object):
     def update(self):
         pass
 
-    def explore(self, env, nb_episode, max_steps=10000, callback=None):
+    def get_action(self, state):
+        state = np.array([state])
+        action = self.sess.run(self.pred_net.action,
+                               feed_dict={self.pred_net.state: state})
+        action = action[0]
+        return action
+
+    def explore(self, env, nb_episode, callback=None):
         nb_step_tot = 0
         nb_update = 0
         nb_update_target = 0
@@ -94,8 +103,7 @@ class Agent(object):
             step = 0
             terminal = False
             reward_episode = 0
-
-            while not terminal and step < max_steps:
+            while not terminal and step < self.max_steps:
                 step += 1
                 nb_step_tot += 1
                 # Select action
@@ -103,10 +111,7 @@ class Agent(object):
                         np.random.rand() < self.eps:
                     action = np.random.randint(0, self.pred_net.nb_action)
                 else:
-                    tmp = np.array([state])
-                    action = self.sess.run(self.pred_net.action,
-                                           feed_dict={self.pred_net.state: tmp})
-                    action = action[0]
+                    action = self.get_action(state)
 
                 # Take a step
                 poststate, reward, terminal, info = env.step(action)
@@ -137,8 +142,25 @@ class Agent(object):
 
                 state = poststate
 
-    def play(self, env):
-        pass
+    def play(self, env, nb_episode=1, log=print):
+        for episode in range(1, nb_episode + 1):
+            state = env.reset()
+            env.render()
+            step = 0
+            terminal = False
+            reward_episode = 0
+            while not terminal and step < self.max_steps:
+                step += 1
+                action = self.get_action(state)
+                state, reward, terminal, info = env.step(action)
+                env.render()
+                reward_episode += reward
+            if log is not None:
+                tmp = ['episode=%d' % episode,
+                       'steps=%d' % step,
+                       'reward=%.2f' % reward_episode]
+                tmp = ' '.join(tmp)
+                log(tmp)
 
 
 class Dqn(Agent):
@@ -158,33 +180,6 @@ class Dqn(Agent):
                 feed_dict={self.pred_net.state: poststate})
         else:
             postaction = np.argmax(target, axis=1)
-        target = target[range(len(target)), postaction]
-        target = reward + self.discount * target * (1 - terminal)
-
-        loss, *_ = self.sess.run([self.loss, self.update_op],
-                                 feed_dict={self.pred_net.state: prestate,
-                                            self.action: action,
-                                            self.target: target})
-
-        self.eps = max(self.eps_min, self.eps - self.eps_decay)
-
-        return loss
-
-    def play(self, env):
-        pass
-
-
-class Sarsa(Agent):
-
-    def __init__(self, *args, **kwargs):
-        super(Sarsa, self).__init__(*args, **kwargs)
-
-    def update(self):
-        prestate, action, reward, poststate, terminal = \
-            self.experience.sample(self.batch_size)
-        target = self.sess.run(self.target_net.q_value,
-                               feed_dict={self.target_net.state: poststate})
-        postaction = np.argmax(target, axis=1)
         target = target[range(len(target)), postaction]
         target = reward + self.discount * target * (1 - terminal)
 

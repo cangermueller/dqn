@@ -36,43 +36,7 @@ class Experience(object):
             raise ValueError('Buffer not yet full!')
         if count > self.size:
             raise ValueError('Insufficient samples in Buffer!')
-        # TODO: Remove
-        assert np.all((self.rewards == 0) | (self.rewards == 1))
-        assert np.all((self.terminals == 0) | (self.terminals == 1))
         idx = np.random.randint(0, self.size - count + 1)
         idx = slice(idx, idx + count)
         return (self.prestates[idx], self.actions[idx], self.rewards[idx],
                 self.poststates[idx], self.terminals[idx])
-
-
-class Experience2(object):
-
-    def __init__(self, size, state_shape=None):
-        self.size = size
-        self.state_shape = state_shape
-        self.buffer = []
-
-    def add(self, *data):
-        if len(self.buffer) == self.size:
-            idx = np.random.randint(0, self.size)
-            self.buffer[idx] = data
-        else:
-            idx = np.random.randint(0, len(self.buffer) + 1)
-            self.buffer.insert(idx, data)
-
-    def sample(self, batch_size=1, stack=True):
-        if len(self.buffer) < batch_size:
-            raise ValueError('Insufficient samples in buffer!')
-        idx = np.random.randint(0, len(self.buffer) - batch_size + 1)
-        batch = self.buffer[idx:idx + batch_size]
-        self.buffer = self.buffer[:idx] + self.buffer[idx + batch_size:]
-        if stack:
-            tmp = []
-            for i in range(len(batch[0])):
-                tmp.append(np.vstack([v[i] for v in batch]).squeeze())
-
-            batch = tmp
-        return tmp
-
-    def __len__(self):
-        return len(self.buffer)

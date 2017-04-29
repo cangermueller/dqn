@@ -22,6 +22,26 @@ def get_agent_class(agent):
         raise ValueError('Agent "%s" invalid!' % agent)
 
 
+def pong_prepro_state(state):
+    state = state[35:195]  # crop
+    state = state[::2, ::2]  # downsample by factor of 2
+    state[state == 144] = 0  # erase background (background type 1)
+    state[state == 109] = 0  # erase background (background type 2)
+    state[state != 0] = 1  # everything else (paddles, ball) just set to 1
+    return state.astype('float32')
+
+
+def decorate_env(env, fun):
+    env.reset = lambda _fun=env.reset: fun(_fun())
+
+    def step(action, _step=env.step):
+        tmp = list(_step(action))
+        tmp[0] = fun(tmp[0])
+        return tmp
+
+    env.step = step
+
+
 class App(object):
 
     def run(self, args):
@@ -56,6 +76,11 @@ class App(object):
             help='Number of episodes',
             type=int,
             default=100)
+        p.add_argument(
+            '--nb_play',
+            help='Number of episodes to play',
+            type=int,
+            default=0)
 
         # Learning parameters
         p.add_argument(
@@ -116,7 +141,7 @@ class App(object):
             '--eps_min',
             help='Minimum of eps parameter',
             type=float,
-            default=0.00001)
+            default=0.001)
         p.add_argument(
             '--eps_steps',
             help='Number of eps annealing steps',
@@ -142,6 +167,24 @@ class App(object):
             type=int,
             nargs='+',
             default=[10])
+        p.add_argument(
+            '--nb_kernel',
+            help='Number of kernels in CNN',
+            type=int,
+            nargs='+',
+            default=[32, 64])
+        p.add_argument(
+            '--kernel_sizes',
+            help='Kernels sizes in CNN',
+            type=int,
+            nargs='+',
+            default=[3, 3])
+        p.add_argument(
+            '--pool_sizes',
+            help='Pooling sizes in CNN',
+            type=int,
+            nargs='+',
+            default=[32, 64])
 
         # Misc
         p.add_argument(
@@ -209,11 +252,20 @@ class App(object):
 
         # Build networks
         if isinstance(env.observation_space, gym.spaces.Box) and \
-                len(env.observation_space.shape) == 2:
+                len(env.observation_space.shape) == 3:
             network_class = networks.Cnn
         else:
             network_class = networks.Mlp
-        if isinstance(env.observation_space, gym.spaces.Discrete):
+
+        max_steps = 1000
+        if opts.env == 'Pong-v0':
+            state_shape = [80, 80, 3]
+            state = tf.placeholder(tf.float32, [None] + state_shape,
+                                   name='state')
+            prepro_state = state
+            decorate_env(env, pong_prepro_state)
+            max_steps = 1500
+        elif isinstance(env.observation_space, gym.spaces.Discrete):
             state_shape = None
             state = tf.placeholder(tf.int32, [None], name='state')
             prepro_state = tf.one_hot(state, env.observation_space.n)
@@ -231,8 +283,10 @@ class App(object):
                                           nb_action=env.action_space.n,
                                           prepro_state=prepro_state,
                                           dual=not opts.no_dual,
-                                          nb_hidden=opts.nb_hidden))
-
+                                          nb_hidden=opts.nb_hidden,
+                                          nb_kernel=opts.nb_kernel,
+                                          kernel_size=opts.kernel_sizes,
+                                          pool_sizes=opts.pool_sizes))
         pred_net, target_net = nets
 
         # Setup agent
@@ -255,7 +309,9 @@ class App(object):
                             update_freq_target=opts.update_freq_target,
                             nb_pretrain_step=opts.nb_pretrain_step,
                             huber_loss=opts.huber_loss,
-                            max_grad_norm=opts.max_grad_norm)
+                            max_steps=max_steps,
+                            max_grad_norm=opts.max_grad_norm,
+                            )
 
         self.saver = tf.train.Saver()
         if opts.in_checkpoint:
@@ -263,7 +319,12 @@ class App(object):
             self.saver.restore(self.sess, opts.in_checkpoint)
         else:
             self.sess.run(tf.global_variables_initializer())
-        agent.explore(env, opts.nb_episode, callback=self.callback)
+
+        if opts.nb_episode:
+            agent.explore(env, opts.nb_episode, callback=self.callback)
+
+        if opts.nb_play:
+            agent.play(env, opts.nb_play)
 
         self.save_graph()
         return 0

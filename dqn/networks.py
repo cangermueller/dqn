@@ -57,15 +57,21 @@ class Mlp(Network):
 
 class Cnn(Network):
 
-    def __init__(self, nb_kernels=[64, 128], kernel_sizes=[3, 3]):
+    def __init__(self,
+                 nb_kernels=[64, 128],
+                 kernel_sizes=[3, 3],
+                 pool_sizes=[2, 2],
+                 *args, **kwargs):
         self.nb_kernels = nb_kernels
         self.kernel_sizes = kernel_sizes
+        self.pool_sizes = pool_sizes
+        super(Cnn, self).__init__(*args, **kwargs)
 
     def _build_stem(self):
         layer = self.prepro_state
         for idx in range(len(self.nb_kernels)):
             layer = slim.conv2d(layer, self.nb_kernels[idx],
                                 self.kernel_sizes[idx])
-            layer = slim.max_pool2d(layer, 2)
+            layer = slim.max_pool2d(layer, self.pool_sizes[idx])
         self.stem = slim.flatten(layer)
         return self.stem
