@@ -1,6 +1,6 @@
-# Deep Q-learning
+# Deep Q-Networks
 
-Re-implementation of deep Q-learning (DQN).
+Reinforcement learning with Deep Q-Networks (DQN).
 
 ## Contact
 * Christof Angermueller
