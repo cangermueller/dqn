@@ -9,6 +9,7 @@ import sys
 import argparse
 import logging
 import gym
+import numpy as np
 import tensorflow as tf
 
 from dqn import agents, networks
@@ -22,13 +23,13 @@ def get_agent_class(agent):
         raise ValueError('Agent "%s" invalid!' % agent)
 
 
-def pong_prepro_state(state):
-    state = state[35:195]  # crop
-    state = state[::2, ::2]  # downsample by factor of 2
-    state[state == 144] = 0  # erase background (background type 1)
-    state[state == 109] = 0  # erase background (background type 2)
-    state[state != 0] = 1  # everything else (paddles, ball) just set to 1
-    return state.astype('float32')
+def pong_prepro_state(state, downsample=2):
+    state = state[35:195]
+    state = state[::downsample, ::downsample]
+    state = state.astype(np.float32) / 256
+    for idx in range(state.shape[-1]):
+        state[:, :, idx] -= state[:, :, idx].mean()
+    return state
 
 
 def decorate_env(env, fun):
@@ -40,6 +41,14 @@ def decorate_env(env, fun):
         return tmp
 
     env.step = step
+
+
+def count_params(variables):
+    nb_param = 0
+    for variable in variables:
+        shape = variable.get_shape().as_list()
+        nb_param += np.prod(shape)
+    return nb_param
 
 
 class App(object):
@@ -129,9 +138,10 @@ class App(object):
             default=4)
         p.add_argument(
             '--update_freq_target',
-            help='Update frequency in steps of target network',
+            help='Update frequency of target network as multiple for ' +
+            '`update_freq`',
             type=int,
-            default=4)
+            default=1)
         p.add_argument(
             '--eps',
             help='Start value of eps parameter',
@@ -185,6 +195,11 @@ class App(object):
             type=int,
             nargs='+',
             default=[32, 64])
+        p.add_argument(
+            '--dropout',
+            help='Dropout rate',
+            type=float,
+            default=0.1)
 
         # Misc
         p.add_argument(
@@ -285,9 +300,12 @@ class App(object):
                                           dual=not opts.no_dual,
                                           nb_hidden=opts.nb_hidden,
                                           nb_kernel=opts.nb_kernel,
-                                          kernel_size=opts.kernel_sizes,
-                                          pool_sizes=opts.pool_sizes))
+                                          kernel_sizes=opts.kernel_sizes,
+                                          pool_sizes=opts.pool_sizes,
+                                          dropout=opts.dropout))
         pred_net, target_net = nets
+        log.info('Number of network parameters: %d' %
+                 count_params(pred_net.trainable_vars))
 
         # Setup agent
         experience = Experience(opts.experience_size, state_shape=state_shape)
@@ -306,7 +324,8 @@ class App(object):
                             double_dqn=opts.double_dqn,
                             discount=opts.discount,
                             update_freq=opts.update_freq,
-                            update_freq_target=opts.update_freq_target,
+                            update_freq_target=opts.update_freq *
+                            opts.update_freq_target,
                             nb_pretrain_step=opts.nb_pretrain_step,
                             huber_loss=opts.huber_loss,
                             max_steps=max_steps,
