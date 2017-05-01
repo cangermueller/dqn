@@ -4,8 +4,7 @@ from tensorflow.contrib import slim
 
 class Network(object):
 
-    def __init__(self, state, nb_action, prepro_state=None, dual=False,
-                 *args, **kwargs):
+    def __init__(self, state, nb_action, prepro_state=None, dual=False):
         self.state = state
         if prepro_state is None:
             self.prepro_state = self.state

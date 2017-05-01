@@ -26,7 +26,7 @@ class Agent(object):
                  huber_loss=False,
                  max_grad_norm=None,
                  max_steps=1000,
-                 *args, **kwargs):
+                 state_fun=None):
         self.sess = sess
         self.pred_net = pred_net
         self.target_net = target_net
@@ -46,6 +46,7 @@ class Agent(object):
         self.huber_loss = huber_loss
         self.max_grad_norm = max_grad_norm
         self.max_steps = max_steps
+        self.state_fun = state_fun
         self.define_loss_and_update()
 
     def define_loss_and_update(self):
@@ -99,7 +100,11 @@ class Agent(object):
         loss_avg = None
 
         for episode in range(1, nb_episode + 1):
-            state = env.reset()
+            observation = env.reset()
+            if self.state_fun:
+                state = self.state_fun(observation)
+            else:
+                state = observation
             step = 0
             terminal = False
             reward_episode = 0
@@ -114,7 +119,11 @@ class Agent(object):
                     action = self.get_action(state)
 
                 # Take a step
-                poststate, reward, terminal, info = env.step(action)
+                observation, reward, terminal, info = env.step(action)
+                if self.state_fun:
+                    poststate = self.state_fun(observation, state)
+                else:
+                    poststate = observation
                 self.experience.add(state, action, reward, poststate, terminal)
                 reward_episode += reward
 

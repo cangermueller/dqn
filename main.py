@@ -9,6 +9,7 @@ import sys
 import argparse
 import logging
 import gym
+from gym.wrappers import Monitor
 import numpy as np
 import tensorflow as tf
 
@@ -23,24 +24,25 @@ def get_agent_class(agent):
         raise ValueError('Agent "%s" invalid!' % agent)
 
 
-def pong_prepro_state(state, downsample=2):
-    state = state[35:195]
-    state = state[::downsample, ::downsample]
-    state = state.astype(np.float32) / 256
-    for idx in range(state.shape[-1]):
-        state[:, :, idx] -= state[:, :, idx].mean()
-    return state
+def rgb2y(image, scalars=[0.299, 0.587, 0.114]):
+    y = np.zeros(image.shape[:2], dtype=np.float32)
+    for idx, scalar in enumerate(scalars):
+        y += scalar * image[:, :, idx]
+    return y
 
 
-def decorate_env(env, fun):
-    env.reset = lambda _fun=env.reset: fun(_fun())
-
-    def step(action, _step=env.step):
-        tmp = list(_step(action))
-        tmp[0] = fun(tmp[0])
-        return tmp
-
-    env.step = step
+def pong_state_fun(image, prev_state=None, stack_size=4):
+    image = image[35:195]
+    image = image[::2, ::2]
+    image = image.astype(np.float32) / 256
+    image = rgb2y(image) - 0.5
+    image = np.expand_dims(image, axis=2)
+    if prev_state is None:
+        image = np.tile(image, (1, 1, stack_size))
+    else:
+        image = np.concatenate((image, prev_state[:, :, :-1]), axis=-1)
+    assert image.shape[-1] == stack_size
+    return image
 
 
 def count_params(variables):
@@ -68,6 +70,8 @@ class App(object):
             '--env',
             help='Environment',
             default='FrozenLake-v0')
+
+        # IO options
         p.add_argument(
             '-i', '--in_checkpoint',
             help='Input checkpoint path')
@@ -79,7 +83,9 @@ class App(object):
             help='Frequency in epochs to create checkpoint',
             type=int,
             default=1000)
-
+        p.add_argument(
+            '--monitor',
+            help='Output directory of gym monitor')
         p.add_argument(
             '--nb_episode',
             help='Number of episodes',
@@ -203,6 +209,11 @@ class App(object):
 
         # Misc
         p.add_argument(
+            '--stack_size',
+            help='Number of last images to be concatenated',
+            type=int,
+            default=4)
+        p.add_argument(
             '--verbose',
             help='More detailed log messages',
             action='store_true')
@@ -250,6 +261,30 @@ class App(object):
             self.log.info('Saving graph to %s ...' % self.opts.out_checkpoint)
             self.saver.save(self.sess, self.opts.out_checkpoint)
 
+    def build_mlp(self, env, state, prepro_state):
+        opts = self.opts
+        net = networks.Mlp(state=state,
+                           prepro_state=prepro_state,
+                           nb_action=env.action_space.n,
+                           dual=not opts.no_dual,
+                           nb_hidden=opts.nb_hidden
+                           )
+        return net
+
+    def build_cnn(self, env, state, prepro_state):
+        opts = self.opts
+        net = networks.Cnn(state=state,
+                           prepro_state=prepro_state,
+                           nb_action=env.action_space.n,
+                           dual=not opts.no_dual,
+                           nb_hidden=opts.nb_hidden,
+                           nb_kernel=opts.nb_kernel,
+                           kernel_sizes=opts.kernel_sizes,
+                           pool_sizes=opts.pool_sizes,
+                           dropout=opts.dropout
+                           )
+        return net
+
     def main(self, name, opts):
         logging.basicConfig(filename=opts.log_file,
                             format='%(levelname)s (%(asctime)s): %(message)s')
@@ -264,21 +299,26 @@ class App(object):
         self.log = log
 
         env = gym.make(opts.env)
+        if opts.monitor:
+            os.makedirs(opts.monitor, exist_ok=True)
+            env = Monitor(env, opts.monitor, force=True)
 
         # Build networks
-        if isinstance(env.observation_space, gym.spaces.Box) and \
-                len(env.observation_space.shape) == 3:
-            network_class = networks.Cnn
-        else:
-            network_class = networks.Mlp
-
         max_steps = 1000
+        state_fun = None
+        network_fun = self.build_mlp
         if opts.env == 'Pong-v0':
-            state_shape = [80, 80, 3]
+            state_shape = [80, 80, opts.stack_size]
             state = tf.placeholder(tf.float32, [None] + state_shape,
                                    name='state')
             prepro_state = state
-            decorate_env(env, pong_prepro_state)
+            network_fun = self.build_cnn
+
+            def _pong_state_fun(*args, **kwargs):
+                return pong_state_fun(stack_size=opts.stack_size,
+                                      *args, **kwargs)
+
+            state_fun = _pong_state_fun
             max_steps = 1500
         elif isinstance(env.observation_space, gym.spaces.Discrete):
             state_shape = None
@@ -294,15 +334,7 @@ class App(object):
         for name in ['pred_net', 'target_net']:
             log.info('Building %s ...' % name)
             with tf.variable_scope(name):
-                nets.append(network_class(state=state,
-                                          nb_action=env.action_space.n,
-                                          prepro_state=prepro_state,
-                                          dual=not opts.no_dual,
-                                          nb_hidden=opts.nb_hidden,
-                                          nb_kernel=opts.nb_kernel,
-                                          kernel_sizes=opts.kernel_sizes,
-                                          pool_sizes=opts.pool_sizes,
-                                          dropout=opts.dropout))
+                nets.append(network_fun(env, state, prepro_state))
         pred_net, target_net = nets
         log.info('Number of network parameters: %d' %
                  count_params(pred_net.trainable_vars))
@@ -330,6 +362,7 @@ class App(object):
                             huber_loss=opts.huber_loss,
                             max_steps=max_steps,
                             max_grad_norm=opts.max_grad_norm,
+                            state_fun=state_fun
                             )
 
         self.saver = tf.train.Saver()
