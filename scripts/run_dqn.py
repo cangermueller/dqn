@@ -1,9 +1,10 @@
-#!/usr/bin/env python
+#!/usr/bin/env python -u
 
 from __future__ import division
 from __future__ import print_function
 
 import os
+import random
 import sys
 
 import argparse
@@ -214,6 +215,11 @@ class App(object):
             type=int,
             default=4)
         p.add_argument(
+            '--seed',
+            help='Seed of random number generator',
+            type=int,
+            default=0)
+        p.add_argument(
             '--verbose',
             help='More detailed log messages',
             action='store_true')
@@ -223,9 +229,10 @@ class App(object):
 
         return p
 
-    def callback(self, episode, nb_step_tot,
+    def callback(self, episode, nb_step, nb_step_tot,
                  nb_update, nb_update_target,
-                 reward_episode, reward_avg, loss_avg,
+                 reward_episode, reward_avg,
+                 target_avg, q_value_avg, loss_avg,
                  eps, *args, **kwargs):
 
         if episode % self.opts.save_freq == 0:
@@ -239,27 +246,39 @@ class App(object):
 
         tmp = ['episode={episode:d}',
                'steps={steps:d}',
+               'steps_tot={steps_tot:d}',
                'updates={updates:d}',
                'updates_t={updates_t:d}',
                'r_epi={r_epi:.2f}',
                'r_avg={r_avg:s}',
-               'loss={loss:s}',
+               't_avg={t_avg:s}',
+               'q_avg={q_avg:s}',
+               'loss_avg={loss_avg:s}',
                'eps={eps:.4f}']
         tmp = '  '.join(tmp)
         tmp = tmp.format(episode=episode,
-                         steps=nb_step_tot,
+                         steps=nb_step,
+                         steps_tot=nb_step_tot,
                          updates=nb_update,
                          updates_t=nb_update_target,
                          r_epi=reward_episode,
                          r_avg=format_na(reward_avg, '.2f'),
-                         loss=format_na(loss_avg, '5g'),
+                         t_avg=format_na(target_avg, '.2f'),
+                         q_avg=format_na(q_value_avg, '.2f'),
+                         loss_avg=format_na(loss_avg, '5g'),
                          eps=eps)
         print(tmp)
 
     def save_graph(self):
-        if self.opts.out_checkpoint:
-            self.log.info('Saving graph to %s ...' % self.opts.out_checkpoint)
-            self.saver.save(self.sess, self.opts.out_checkpoint)
+        out_path = self.opts.out_checkpoint
+        if not out_path:
+            return
+        if not os.path.isdir(out_path):
+            out_dir = os.path.dirname(out_path)
+            os.makedirs(out_dir, exist_ok=True)
+
+        self.log.info('Saving graph to %s ...' % out_path)
+        self.saver.save(self.sess, out_path)
 
     def build_mlp(self, env, state, prepro_state):
         opts = self.opts
@@ -295,16 +314,20 @@ class App(object):
             log.setLevel(logging.INFO)
         log.debug(opts)
 
+        if opts.seed is not None:
+            np.random.seed(opts.seed)
+            random.seed(opts.seed)
+
         self.opts = opts
         self.log = log
 
+        # Build environment
         env = gym.make(opts.env)
         if opts.monitor:
             os.makedirs(opts.monitor, exist_ok=True)
             env = Monitor(env, opts.monitor, force=True)
 
-        # Build networks
-        max_steps = 1000
+        # Setup networks
         state_fun = None
         network_fun = self.build_mlp
         if opts.env == 'Pong-v0':
@@ -319,7 +342,6 @@ class App(object):
                                       *args, **kwargs)
 
             state_fun = _pong_state_fun
-            max_steps = 1500
         elif isinstance(env.observation_space, gym.spaces.Discrete):
             state_shape = None
             state = tf.placeholder(tf.int32, [None], name='state')
@@ -360,11 +382,11 @@ class App(object):
                             opts.update_freq_target,
                             nb_pretrain_step=opts.nb_pretrain_step,
                             huber_loss=opts.huber_loss,
-                            max_steps=max_steps,
                             max_grad_norm=opts.max_grad_norm,
                             state_fun=state_fun
                             )
 
+        # Load or initialize network variables
         self.saver = tf.train.Saver()
         if opts.in_checkpoint:
             log.info('Restoring graph from %s ...' % opts.in_checkpoint)
@@ -372,9 +394,11 @@ class App(object):
         else:
             self.sess.run(tf.global_variables_initializer())
 
+        # Explore
         if opts.nb_episode:
             agent.explore(env, opts.nb_episode, callback=self.callback)
 
+        # Play
         if opts.nb_play:
             agent.play(env, opts.nb_play)
 

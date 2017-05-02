@@ -13,30 +13,32 @@ class Experience(object):
         self.actions = np.empty([size], dtype=np.int32)
         self.rewards = np.empty([size], dtype=np.float32)
         self.terminals = np.empty([size], dtype=np.int8)
-        self._free_idxs = np.arange(self.size)
-        np.random.shuffle(self._free_idxs)
+        self.idx = 0
+        self._is_full = False
+        self.shuffle = np.arange(self.size)
+
+    def __len__(self):
+        return self.size
 
     def is_full(self):
-        return len(self._free_idxs) == 0
+        return self._is_full
 
     def add(self, prestate, action, reward, poststate, terminal):
-        if not self.is_full():
-            idx = self._free_idxs[-1]
-            self._free_idxs = self._free_idxs[:-1]
-        else:
-            idx = np.random.randint(0, self.size)
-        self.prestates[idx] = prestate
-        self.actions[idx] = action
-        self.rewards[idx] = reward
-        self.poststates[idx] = poststate
-        self.terminals[idx] = terminal
+        self.actions[self.idx] = action
+        self.rewards[self.idx] = reward
+        self.poststates[self.idx] = poststate
+        self.terminals[self.idx] = terminal
+        self.idx += 1
+        if self.idx >= self.size:
+            self.idx = 0
+            self._is_full = True
 
     def sample(self, count):
         if not self.is_full():
             raise ValueError('Buffer not yet full!')
         if count > self.size:
             raise ValueError('Insufficient samples in Buffer!')
-        idx = np.random.randint(0, self.size - count + 1)
-        idx = slice(idx, idx + count)
+        np.random.shuffle(self.shuffle)
+        idx = self.shuffle[:count]
         return (self.prestates[idx], self.actions[idx], self.rewards[idx],
                 self.poststates[idx], self.terminals[idx])

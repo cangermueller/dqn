@@ -25,7 +25,7 @@ class Agent(object):
                  nb_pretrain_step=None,
                  huber_loss=False,
                  max_grad_norm=None,
-                 max_steps=1000,
+                 max_steps=10**4,
                  state_fun=None):
         self.sess = sess
         self.pred_net = pred_net
@@ -97,6 +97,8 @@ class Agent(object):
         nb_update = 0
         nb_update_target = 0
         reward_avg = None
+        target_avg = None
+        q_value_avg = None
         loss_avg = None
 
         for episode in range(1, nb_episode + 1):
@@ -131,7 +133,9 @@ class Agent(object):
                 if nb_step_tot > self.nb_pretrain_step:
                     if nb_step_tot % self.update_freq == 0:
                         nb_update += 1
-                        loss = self.update()
+                        loss, target, q_value = self.update()
+                        target_avg = running_avg(target_avg, target)
+                        q_value_avg = running_avg(q_value_avg, q_value)
                         loss_avg = running_avg(loss_avg, loss)
                     if nb_step_tot % self.update_freq_target == 0:
                         nb_update_target += 1
@@ -141,11 +145,14 @@ class Agent(object):
                     reward_avg = running_avg(reward_avg, reward_episode)
                     if callback:
                         callback(episode=episode,
+                                 nb_step=step,
                                  nb_step_tot=nb_step_tot,
                                  nb_update=nb_update,
                                  nb_update_target=nb_update_target,
                                  reward_episode=reward_episode,
                                  reward_avg=reward_avg,
+                                 target_avg=target_avg,
+                                 q_value_avg=q_value_avg,
                                  loss_avg=loss_avg,
                                  eps=self.eps)
 
@@ -192,11 +199,12 @@ class Dqn(Agent):
         target = target[range(len(target)), postaction]
         target = reward + self.discount * target * (1 - terminal)
 
-        loss, *_ = self.sess.run([self.loss, self.update_op],
-                                 feed_dict={self.pred_net.state: prestate,
-                                            self.action: action,
-                                            self.target: target})
+        loss, q_value, *_ = self.sess.run(
+            [self.loss, self.pred_net.q_value, self.update_op],
+            feed_dict={self.pred_net.state: prestate,
+                       self.action: action,
+                       self.target: target})
 
         self.eps = max(self.eps_min, self.eps - self.eps_decay)
 
-        return loss
+        return (loss, target.mean(), q_value.mean())

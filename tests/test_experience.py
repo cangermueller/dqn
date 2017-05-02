@@ -4,8 +4,7 @@ import pytest
 from .experience import Experience
 
 
-def add_random(exp):
-    state_shape = exp.state_shape
+def add_random(exp, state_shape):
     prestate = np.random.uniform(0, 1, state_shape)
     action = np.random.randint(0, 10)
     reward = np.random.rand()
@@ -15,7 +14,7 @@ def add_random(exp):
 
 
 def check_shape(count, state_shape, prestates, actions, rewards, poststates,
-               terminals):
+                terminals):
     assert prestates.shape == (count, state_shape)
     assert poststates.shape == (count, state_shape)
     assert actions.shape == (count,)
@@ -31,12 +30,12 @@ class TestExperience(object):
         exp = Experience(size, [state_shape])
 
         for i in range(size - 7):
-            add_random(exp)
+            add_random(exp, state_shape)
         with pytest.raises(ValueError):
             exp.sample(1)
 
         for i in range(7):
-            add_random(exp)
+            add_random(exp, state_shape)
         with pytest.raises(ValueError):
             exp.sample(size + 1)
 
