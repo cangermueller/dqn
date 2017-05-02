@@ -2,7 +2,7 @@ import numpy as np
 import tensorflow as tf
 
 
-def running_avg(avg, new, update_rate=0.01):
+def running_avg(avg, new, update_rate=0.1):
     if avg is None:
         avg = new
     else:
